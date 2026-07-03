@@ -11,14 +11,14 @@
 #if defined(ARDUINO_ARCH_ESP32)
 #include "HID.h"
 #include "USB.h"
-
-HIDDevice hidDevice;
-#elif defined(ARDUINO_ARCH_ESP8266)
-//
 #endif
 
 #ifndef FIRMWARE_VERSION
 #define FIRMWARE_VERSION "unknown"
+#endif
+
+#if defined(ARDUINO_USB_MODE) && !defined(SERIAL_USB_ONLY)
+HIDDevice hidDevice;
 #endif
 
 Button &button = Button::getInstance();
@@ -32,10 +32,44 @@ void fail(ErrorCodes errorCode) {
     abort();
 }
 
-void setup() {
+#if !defined(ARDUINO_USB_MODE) && defined(SERIAL_USB_ONLY)
+void beginSerial() {
+    uint8_t mac[6];
+
     #ifdef ARDUINO_ARCH_ESP32
-    hidDevice.begin();
+    if (WiFi.getMode() == WIFI_MODE_NULL) {
+        WiFi.mode(WIFI_STA);
+        delay(100);
+    }
+    WiFi.macAddress(mac);
+    #else
+    WiFi.mode(WIFI_STA);
+    delay(5000);
+    WiFi.disconnect();
+    wifi_set_channel(6);
+    WiFi.setOutputPower(SLIME_TX_POWER_DBM);
+    WiFi.setPhyMode(WIFI_PHY_MODE_11N);  // 802.11n to match the trackers
+    wifi_set_sleep_type(NONE_SLEEP_T);   // No power-save; keep the radio hot
+    WiFi.macAddress(mac);
     #endif
+
+    // Format for USB_SERIAL: SVRDG + last 6 hex digits (e.g., SVRDGA1B2C3D4E5F6)
+    char usbSerial[20] = "SVRDG";
+    // Append full MAC address (12 hex digits) to serial string
+    snprintf(usbSerial + 5, sizeof(usbSerial) - 5, "%02X%02X%02X%02X%02X%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    Serial.begin(SERIAL_BAUD_RATE);
+    delay(10);
+    Serial.printf("Serial Only Mode setup complete, please run the slimevr_serial_bridge.py program to begin.");
+}
+#endif
+
+void setup() {
+    #if defined(ARDUINO_USB_MODE) && !defined(SERIAL_USB_ONLY)
+    hidDevice.begin();
+    #else
+    beginSerial();
+    #endif
+
     Serial.printf("Starting up " USB_PRODUCT  "  - " FIRMWARE_VERSION "\n");
 
     statusManager.setStatus(SlimeVR::Status::LOADING, true);
@@ -113,5 +147,9 @@ void loop() {
     // Non-blocking serial command handler
     consoleCommandHandler.update();
 
+    #if defined(ARDUINO_USB_MODE) && !defined(SERIAL_USB_ONLY)
     PacketHandling::getInstance().tick(hidDevice);
+    #else
+    PacketHandling::getInstance().tick();
+    #endif
 }

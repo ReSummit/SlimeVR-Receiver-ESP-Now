@@ -84,7 +84,31 @@ class ESPNowCommunication {
         void sendRateUpdateToAllTrackers();
 
         static void onReceive(uint8_t *mac, uint8_t *data, uint8_t dataLen);
-        void __attribute__((hot)) __attribute__((flatten)) handleMessage(uint8_t *mac, uint8_t *data, uint8_t dataLen);
+        // NOTE: no 'flatten' here. On ESP8266 the recv callback runs in the tiny
+        // SDK/WiFi (sys) stack; flattening inlined Serial.printf/esp_now_send into
+        // one giant frame and overflowed it. Messages are now deferred to cont
+        // context via the receive queue below, and handleMessage keeps a normal
+        // (non-flattened) frame.
+        void handleMessage(uint8_t *mac, uint8_t *data, uint8_t dataLen);
+
+        // Deferred receive queue. The ESP8266 esp_now recv callback runs in the
+        // sys context with a very small stack and must not call esp_now_send or
+        // do heavy work (Serial, malloc, ...). onReceive() only copies the raw
+        // frame here; processReceiveQueue() drains it from update() (cont context)
+        // where there is a real stack. Single-producer (sys) / single-consumer
+        // (cont) lock-free ring: producer touches only tail, consumer only head.
+        static constexpr uint8_t receivedMsgMaxLen = 96;  // > any received message (tracker payload caps at 32)
+        static constexpr size_t maxRecvQueueSize = 16;
+        struct ReceivedMessage {
+            uint8_t mac[6];
+            uint8_t dataLen;
+            uint8_t data[receivedMsgMaxLen];
+        };
+        ReceivedMessage recvQueue[maxRecvQueueSize];
+        volatile size_t recvQueueHead = 0;  // consumer (cont) only
+        volatile size_t recvQueueTail = 0;  // producer (sys) only
+        void enqueueReceived(const uint8_t *mac, const uint8_t *data, uint8_t dataLen);
+        void processReceiveQueue();
 
         uint8_t addPeer(const uint8_t peerMac[6]);
         uint8_t addPeer(const uint8_t peerMac[6], bool defaultConfig);

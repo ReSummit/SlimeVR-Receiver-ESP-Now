@@ -104,6 +104,7 @@ void PacketHandling::createRegistrationReport(uint8_t *report, ESPNowCommunicati
     // Bytes 8-15 are reserved (already zeroed by memset)
 }
 
+#if defined(ARDUINO_USB_MODE) && !defined(SERIAL_USB_ONLY)
 void PacketHandling::tick(HIDDevice &hidDevice) {
     // PPS print every second (packet types 0-4)
     if (!hidDevice.ready()) return;
@@ -165,5 +166,78 @@ void PacketHandling::tick(HIDDevice &hidDevice) {
     if (reportsWritten > 0 && !hidDevice.send(transferBuffer, hidTransferSize)) Serial.println("[USB] Send failed");
     // Print how long it took to send the reports for debugging
 }
+#else
+/*
+For data transmission, use a structured 
+
+*/
+static inline uint8_t crc8_update(uint8_t crc, uint8_t byte) {
+    crc ^= byte;
+    for (uint8_t b = 0; b < 8; b++) {
+        crc = (crc & 0x80) ? static_cast<uint8_t>((crc << 1) ^ 0x07)
+                           : static_cast<uint8_t>(crc << 1);
+    }
+    return crc;
+}
+
+bool send(const uint8_t *data, size_t size) {
+    if (size == 0 || size > 255) return false;
+
+    const uint8_t lenByte = static_cast<uint8_t>(size);
+    uint8_t header[3] = {0xA5, 0x5A, lenByte};
+
+    // CRC-8 (poly 0x07, init 0x00) over the length byte followed by the payload.
+    uint8_t crc = crc8_update(0x00, lenByte);
+    for (size_t i = 0; i < size; i++) crc = crc8_update(crc, data[i]);
+
+    Serial.write(header, 3);
+    Serial.write(data, size);
+    Serial.write(&crc, 1);
+    Serial.flush();
+    return true;
+}
+
+void PacketHandling::tick() {
+    // Prepare 64-byte transfer buffer (4 reports of 16 bytes each), but zeroed out to start
+    uint8_t transferBuffer[hidTransferSize];
+    memset(transferBuffer, 0, sizeof(transferBuffer));
+    size_t reportsWritten = 0;
+
+    // Check to see if theres an available high-priority registration to send
+    size_t priorityAvailable = priorityBuffer.size();
+    if (priorityAvailable > 0) {
+        Packet priorityPacket = priorityBuffer.shift();
+        memcpy(&transferBuffer[reportsWritten * reportSize], priorityPacket.data, reportSize);
+        reportsWritten++;
+        priorityAvailable--;
+    }
+
+    // Check if we have any regular packets to send or if we should send a registration report
+    size_t availableReports = buffer.size();
+    if (availableReports > 0) {
+        size_t reportsToSend = std::min(availableReports, reportsPerTransfer - reportsWritten);
+        for (size_t i = 0; i < reportsToSend; i++) {
+            Packet packet = buffer.shift();
+            memcpy(&transferBuffer[reportsWritten * reportSize], packet.data, reportSize);
+            reportsWritten++;
+        }
+    }
+
+    if (reportsWritten < reportsPerTransfer && priorityAvailable > 0) {
+        // We have space for more reports and still have high-priority ones waiting - fill remaining space with them
+        while (reportsWritten < reportsPerTransfer && priorityAvailable > 0) {
+            Packet priorityPacket = priorityBuffer.shift();
+            memcpy(&transferBuffer[reportsWritten * reportSize], priorityPacket.data, reportSize);
+            reportsWritten++;
+            priorityAvailable--;
+        }
+    }
+    
+    // Via serial print, the output will be flooded with the reports, easily checked by looking at serial monitor
+    if (reportsWritten > 0) {
+        send(transferBuffer, hidTransferSize);
+    }
+}
+#endif
 
 PacketHandling PacketHandling::instance;
