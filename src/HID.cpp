@@ -1,3 +1,5 @@
+#if defined(ARDUINO_USB_MODE) && !defined(SERIAL_USB_ONLY)
+
 #include "HID.h"
 #include "GlobalVars.h"
 #include "serialCom/SerialCom.h"
@@ -93,3 +95,5 @@ bool HIDDevice::ready() {
 }
 
 bool HIDDevice::initialized = false;
+
+#endif

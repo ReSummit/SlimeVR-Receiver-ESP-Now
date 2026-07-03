@@ -1,5 +1,7 @@
 #pragma once
 
+#if defined(ARDUINO_USB_MODE) && !defined(SERIAL_USB_ONLY)
+
 #include <USBHID.h>
 #include <cstddef>
 #include <cstdint>
@@ -35,3 +37,5 @@ private:
     static bool initialized;
     USBHID HID;
 };
+
+#endif
