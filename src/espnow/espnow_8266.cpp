@@ -81,20 +81,19 @@ ESPNowCommunication::Tracker* ESPNowCommunication::getTrackerByIndex(size_t inde
 
 // Gets the tracker structure for a given MAC address
 ESPNowCommunication::Tracker *ESPNowCommunication::getTracker(const uint8_t peerMac[6]) {
-    // Fast MAC comparison using integer comparisons instead of memcmp
+    // Byte-wise compare: peerMac may be unaligned (e.g. a receive-queue slot),
+    // and the ESP8266 (lx106) faults on unaligned 32-bit loads (exception 9).
     for (auto &tracker : connectedTrackers) {
-        if (*reinterpret_cast<const uint32_t *>(tracker.mac.data()) == *reinterpret_cast<const uint32_t *>(peerMac) && *reinterpret_cast<const uint16_t *>(tracker.mac.data() + 4) == *reinterpret_cast<const uint16_t *>(peerMac + 4)) {
-            return &tracker;
-        }
+        if (memcmp(tracker.mac.data(), peerMac, 6) == 0) return &tracker;
     }
     return nullptr;
 }
 
 // Checks if a tracker with the given MAC address is currently connected
 bool ESPNowCommunication::isTrackerConnected(const uint8_t peerMac[6]) {
-    // Fast MAC comparison using integer comparisons instead of memcmp
+    // Byte-wise compare - see getTracker() for the alignment rationale.
     for (const auto &tracker : connectedTrackers) {
-        if (*reinterpret_cast<const uint32_t *>(tracker.mac.data()) == *reinterpret_cast<const uint32_t *>(peerMac) && *reinterpret_cast<const uint16_t *>(tracker.mac.data() + 4) == *reinterpret_cast<const uint16_t *>(peerMac + 4) && esp_now_is_peer_exist((uint8_t *) peerMac)) return true;
+        if (memcmp(tracker.mac.data(), peerMac, 6) == 0 && esp_now_is_peer_exist((uint8_t *) peerMac)) return true;
     }
     return false;
 }
@@ -336,6 +335,11 @@ ErrorCodes ESPNowCommunication::begin() {
         return ErrorCodes::ESP_NOW_INIT_FAILED;
     }
 
+    // ESP8266 SDK defaults the self role to ESP_NOW_ROLE_IDLE after init, which
+    // blocks esp_now_send() (fails with -3). This receiver both sends and
+    // receives, so it must run as COMBO. (The ESP32 API has no self-role concept.)
+    esp_now_set_self_role(ESP_NOW_ROLE_COMBO);
+
     result = addPeer(broadcastAddress, true);
     if (result != ESP_OK)
     {
@@ -364,11 +368,42 @@ ErrorCodes ESPNowCommunication::begin() {
     return ErrorCodes::NO_ERROR;
 }
 
-// ESPNOW receive callback
+// ESPNOW receive callback - runs in the sys (WiFi) context with a tiny stack.
+// Do the absolute minimum: copy the frame into the receive queue and return.
+// All real work happens later in processReceiveQueue() from update() (cont).
 void ESPNowCommunication::onReceive(uint8_t *mac, uint8_t *data, uint8_t dataLen) {
     // Ignore received packets while in scanning mode
     if (ESPNowCommunication::getInstance().isScanningEnvironment()) return;
-    ESPNowCommunication::getInstance().handleMessage(mac, data, dataLen);
+    ESPNowCommunication::getInstance().enqueueReceived(mac, data, dataLen);
+}
+
+// Producer side of the receive ring (sys context). Must not log, allocate, or
+// call back into the WiFi stack - just copy bytes and publish the tail.
+void ESPNowCommunication::enqueueReceived(const uint8_t *mac, const uint8_t *data, uint8_t dataLen) {
+    if (dataLen == 0 || dataLen > receivedMsgMaxLen) return;  // drop empty/oversized (can't Serial here)
+
+    const size_t nextTail = (recvQueueTail + 1) % maxRecvQueueSize;
+    if (nextTail == recvQueueHead) return;  // ring full - drop (insert() dedups, so tolerable)
+
+    ReceivedMessage &slot = recvQueue[recvQueueTail];
+    memcpy(slot.mac, mac, 6);
+    memcpy(slot.data, data, dataLen);
+    slot.dataLen = dataLen;
+
+    // Ensure the slot is fully written before the consumer can see the new tail.
+    __asm__ volatile("" ::: "memory");
+    recvQueueTail = nextTail;
+}
+
+// Consumer side of the receive ring (cont context). Drains everything queued
+// since the last call and dispatches through the full handleMessage() path.
+void ESPNowCommunication::processReceiveQueue() {
+    while (recvQueueHead != recvQueueTail) {
+        ReceivedMessage &slot = recvQueue[recvQueueHead];
+        handleMessage(slot.mac, slot.data, slot.dataLen);
+        __asm__ volatile("" ::: "memory");
+        recvQueueHead = (recvQueueHead + 1) % maxRecvQueueSize;
+    }
 }
 
 // Handles incoming ESPNOW messages
@@ -510,7 +545,6 @@ void ESPNowCommunication::handleMessage(uint8_t *mac, uint8_t *data, uint8_t dat
     }
     case ESPNowMessageTypes::HEARTBEAT_ECHO: {
         // Fast MAC lookup for connected tracker
-        const uint8_t *mac = mac;
         Tracker *tracker = getTracker(mac);
         if (tracker == nullptr) return;
         tracker->missedPings = 0;
@@ -524,7 +558,6 @@ void ESPNowCommunication::handleMessage(uint8_t *mac, uint8_t *data, uint8_t dat
     }
     case ESPNowMessageTypes::HEARTBEAT_RESPONSE: {
         // Find the tracker and update heartbeat info
-        const uint8_t *mac = mac;
         Tracker *tracker = getTracker(mac);
         if (tracker == nullptr) return;
         if (tracker->waitingForResponse) {
@@ -542,7 +575,6 @@ void ESPNowCommunication::handleMessage(uint8_t *mac, uint8_t *data, uint8_t dat
     }
     case ESPNowMessageTypes::ENTER_OTA_ACK:{
         // Find the tracker and mark it as in OTA
-        const uint8_t *mac = mac;
         Tracker *tracker = getTracker(mac);
         if (tracker == nullptr) return;
 
@@ -565,7 +597,12 @@ void ESPNowCommunication::scanningLoop() {
 // Main update loop to be called regularly
 void ESPNowCommunication::update() {
     const unsigned long currentTime = millis();
-    
+
+    // Drain deferred received messages FIRST, every loop, before the throttle
+    // below can early-return. This is where handshakes/heartbeats/tracker data
+    // are actually handled - in cont context with a full stack.
+    processReceiveQueue();
+
     // Throttle updates to reduce CPU usage - skip if called too frequently
     // This prevents excessive polling when update() is called in a tight loop
     if (currentTime - lastUpdateTime < minUpdateInterval) {

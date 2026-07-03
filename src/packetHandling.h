@@ -1,6 +1,9 @@
 #pragma once
 
+#if defined(ARDUINO_USB_MODE) && !defined(SERIAL_USB_ONLY)
 #include "HID.h"
+#endif
+
 #include "hal/common_espnow.h"
 
 #include <Arduino.h>
@@ -18,7 +21,12 @@ public:
     void insert(const uint8_t *data, uint8_t len, int8_t rssi = 0);
     void insertPriority(const uint8_t *data, uint8_t len);
     void sendDisconnectionStatus(uint8_t trackerId);
+
+    #if defined(ARDUINO_USB_MODE) && !defined(SERIAL_USB_ONLY)
     void tick(HIDDevice &hidDevice);
+    #else
+    void tick();
+    #endif
     void createRegistrationReport(uint8_t *report, ESPNowCommunication::Tracker tracker);
 
 private:

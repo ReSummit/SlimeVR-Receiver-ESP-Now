@@ -1,4 +1,4 @@
-#if !defined(ARDUINO_ARCH_ESP8266)
+#if defined(ARDUINO_USB_MODE) && !defined(SERIAL_USB_ONLY)
 
 #include "HID.h"
 #include "GlobalVars.h"
