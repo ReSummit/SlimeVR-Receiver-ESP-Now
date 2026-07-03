@@ -1,6 +1,6 @@
 #include "packetHandling.h"
-#include "espnow/espnow.h"
-#include "Configuration.h"
+#include "hal/common_espnow.h"
+#include "configuration.h"
 #include "./espnow/espnow.h"
 
 PacketHandling &PacketHandling::getInstance() {

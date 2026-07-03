@@ -3,7 +3,7 @@
 #include "MessageBuilder.h"
 #include "./SerialCom.h"
 #include "../GlobalVars.h"
-#include "../espnow/espnow.h"
+#include "hal/common_espnow.h"
 
 namespace SlimeVR
 {

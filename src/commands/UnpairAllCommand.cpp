@@ -1,6 +1,6 @@
 #include "UnpairAllCommand.h"
 
-#include "../espnow/espnow.h"
+#include "hal/common_espnow.h"
 
 bool handleUnpairAllCommand(const String &command) {
     if (!command.equalsIgnoreCase("unpairall")) {

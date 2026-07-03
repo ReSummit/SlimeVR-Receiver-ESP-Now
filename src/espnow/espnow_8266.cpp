@@ -1,11 +1,10 @@
-#if defined(ARDUINO_ARCH_ESP32)
+#if defined(ARDUINO_ARCH_ESP8266)
 
 #include "configuration.h"
 #include "hal/common.h"
 
-#include "espnow.h"
-#include "espnow/messages.h"
-#include <esp_wifi.h>
+#include <ESP8266WiFi.h>
+#include <espnow.h>
 
 #include "configuration.h"
 
@@ -210,7 +209,6 @@ void ESPNowCommunication::queueMessage(const uint8_t peerMac[6], const uint8_t *
 
 // Process queued messages with rate limiting
 void ESPNowCommunication::processSendQueue() {
-    MutexLock lock(queueMutex);
     if (queueHead == queueTail) return;
 
     // Serial.printf("Queue in processSendQueue: head=%zu, tail=%zu\n", queueHead, queueTail);
@@ -316,14 +314,6 @@ void ESPNowCommunication::sendRateUpdateToAllTrackers() {
 
 // Initializes ESPNOW communication
 ErrorCodes ESPNowCommunication::begin() {
-    // Initialize mutex for queue protection
-    if (!queueMutex) {
-        queueMutex = xSemaphoreCreateMutex();
-        if (!queueMutex) {
-            Serial.println("[ESPNOW] Failed to create queue mutex!");
-            return ErrorCodes::ESP_NOW_INIT_FAILED;
-        }
-    }
     channel = Configuration::getInstance().getWifiChannel();
 
     // Pre-allocate vectors to avoid reallocations during operation
@@ -336,14 +326,9 @@ ErrorCodes ESPNowCommunication::begin() {
 
     WiFi.mode(WIFI_STA);
     WiFi_Platform_SetChannel(channel);
-    WiFi.setTxPower(WIFI_POWER_19_5dBm); // Max power
-    esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11N);
-    esp_wifi_set_ps(WIFI_PS_NONE);
-
-    rate_config.phymode = WIFI_PHY_MODE_HT20;
-    rate_config.rate = WIFI_PHY_RATE_MCS0_SGI;
-    rate_config.ersu = false;
-    rate_config.dcm = true;
+    WiFi.setOutputPower(SLIME_TX_POWER_DBM); // Max power
+    WiFi.setPhyMode(WIFI_PHY_MODE_11N);
+    wifi_set_sleep_type(NONE_SLEEP_T);
 
     auto result = esp_now_init();
     if (result != ESP_OK) {
@@ -380,14 +365,16 @@ ErrorCodes ESPNowCommunication::begin() {
 }
 
 // ESPNOW receive callback
-void ESPNowCommunication::onReceive(const esp_now_recv_info_t *senderInfo, const uint8_t *data, int dataLen) {
+void ESPNowCommunication::onReceive(uint8_t *mac, uint8_t *data, uint8_t dataLen) {
     // Ignore received packets while in scanning mode
     if (ESPNowCommunication::getInstance().isScanningEnvironment()) return;
-    ESPNowCommunication::getInstance().handleMessage(senderInfo, data, dataLen);
+    ESPNowCommunication::getInstance().handleMessage(mac, data, dataLen);
 }
 
 // Handles incoming ESPNOW messages
-void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, const uint8_t *data, int dataLen) {
+void ESPNowCommunication::handleMessage(uint8_t *mac, uint8_t *data, uint8_t dataLen) {
+    // Ignore received packets while in scanning mode
+    if (ESPNowCommunication::getInstance().isScanningEnvironment()) return;
     // Fast path: cast message once and read header
     //Serial.printf("[ESPNOW] Received message of length %d from " MACSTR "\n", dataLen, MAC2ARGS(senderInfo->src_addr));
     const ESPNowMessage *message = reinterpret_cast<const ESPNowMessage *>(data);
@@ -396,7 +383,6 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
     // Optimize the most common case - TRACKER_DATA (hot path)
     if (header == ESPNowMessageTypes::TRACKER_DATA) {
         // Fast validation: check if tracker is connected (most packets come from connected trackers)
-        const uint8_t *mac = senderInfo->src_addr;
         Tracker* tracker = getTracker(mac);
         if (tracker == nullptr) return; // Tracker not connected - ignore packet
 
@@ -404,14 +390,14 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
         recievedPacketCount++;
         recievedByteCount += message->packet.len;
 
-        // Update RSSI for this tracker
-        tracker->rssi = senderInfo->rx_ctrl->rssi;
+        // Set RSSI to 0 (ESP8266 doesn't have RSSI tracking)
+        tracker->rssi = 0;
 
         tracker->bytesReceived += message->packet.len;
         tracker->packetsReceived += 1;
 
         // Forward packet to PacketHandling with RSSI
-        PacketHandling::getInstance().insert(message->packet.data, message->packet.len, senderInfo->rx_ctrl->rssi);
+        PacketHandling::getInstance().insert(message->packet.data, message->packet.len, 0);
         return;
     }
 
@@ -422,29 +408,29 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
         if (memcmp(request.securityBytes, securityCode, 8) != 0) return; // Invalid security code
 
         // Step 1: Check if tracker is already paired
-        if (!Configuration::getInstance().isPairedTracker(senderInfo->src_addr)) {
+        if (!Configuration::getInstance().isPairedTracker(mac)) {
             if (!pairing) return; // Ignore pairing requests if not in pairing mode
             if (Configuration::getInstance().isPairedTrackerCapacityReached()) {
                 Serial.println(kPairingCapacityMessage);
                 return;
             }
-            Configuration::getInstance().addPairedTracker(senderInfo->src_addr);
+            Configuration::getInstance().addPairedTracker(mac);
             // Allocate persistent tracker ID for this MAC address
             uint8_t trackerId;
-            if (!Configuration::getInstance().getTrackerIdForMac(senderInfo->src_addr, trackerId)) {
-                Configuration::getInstance().removePairedTracker(senderInfo->src_addr);
+            if (!Configuration::getInstance().getTrackerIdForMac(mac, trackerId)) {
+                Configuration::getInstance().removePairedTracker(mac);
                 Serial.println(kPairingCapacityMessage);
                 return;
             }
-            Serial.printf("Paired a new tracker at mac address " MACSTR " with ID %d!\n", MAC2ARGS(senderInfo->src_addr), trackerId);
+            Serial.printf("Paired a new tracker at mac address " MACSTR " with ID %d!\n", MAC2ARGS(mac), trackerId);
         } else {
-            Serial.printf("Tracker at mac address " MACSTR " is already paired!\n", MAC2ARGS(senderInfo->src_addr));
+            Serial.printf("Tracker at mac address " MACSTR " is already paired!\n", MAC2ARGS(mac));
         }
 
         // Step 2: Send acknowledgment
         ESPNowPairingAckMessage ackMessage;
-        // Serial.printf("Sending pairing acknowledgment to " MACSTR "\n", MAC2ARGS(senderInfo->src_addr));
-        queueMessage(senderInfo->src_addr, reinterpret_cast<uint8_t *>(&ackMessage), sizeof(ackMessage), false, true);
+        // Serial.printf("Sending pairing acknowledgment to " MACSTR "\n", MAC2ARGS(mac));
+        queueMessage(mac, reinterpret_cast<uint8_t *>(&ackMessage), sizeof(ackMessage), false, true);
 
         pairingStartTime = millis();
         break;
@@ -455,29 +441,29 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
         const ESPNowConnectionMessage &handshake = message->connection;
         // Validate security code
         if (memcmp(handshake.securityBytes, securityCode, 8) != 0) {
-            // Serial.printf("Received handshake from " MACSTR " with invalid security code! Sent: ", MAC2ARGS(senderInfo->src_addr));
+            // Serial.printf("Received handshake from " MACSTR " with invalid security code! Sent: ", MAC2ARGS(mac));
             // for (int i = 0; i < 8; ++i) Serial.printf("%02x", handshake.securityBytes[i]);
             // Serial.println();
             return;
         }
 
         // Check that the tracker MAC is in persistent memory
-        if (!Configuration::getInstance().isPairedTracker(senderInfo->src_addr)) {
-            Serial.printf("Received handshake from unpaired tracker " MACSTR " - ignoring!\n", MAC2ARGS(senderInfo->src_addr));
+        if (!Configuration::getInstance().isPairedTracker(mac)) {
+            Serial.printf("Received handshake from unpaired tracker " MACSTR " - ignoring!\n", MAC2ARGS(mac));
             return;
         }
 
-        Tracker* tracker = getTracker(senderInfo->src_addr);
+        Tracker* tracker = getTracker(mac);
         // Check to make sure the tracker isn't already connected
         if (tracker != nullptr) {
-            Serial.printf("Tracker at mac address " MACSTR " is already connected!\n", MAC2ARGS(senderInfo->src_addr));
+            Serial.printf("Tracker at mac address " MACSTR " is already connected!\n", MAC2ARGS(mac));
 
             ESPNowConnectionAckMessage handshakeResponse;
             handshakeResponse.trackerId = tracker->trackerId;
             handshakeResponse.channel = channel;
             memcpy(handshakeResponse.token, handshake.token, 8);
-            memcpy(handshakeResponse.targetAddr, senderInfo->src_addr, 6);
-            Serial.printf("Re-sending handshake ack to " MACSTR " for tracker ID %d - token: ", MAC2ARGS(senderInfo->src_addr), tracker->trackerId);
+            memcpy(handshakeResponse.targetAddr, mac, 6);
+            Serial.printf("Re-sending handshake ack to " MACSTR " for tracker ID %d - token: ", MAC2ARGS(mac), tracker->trackerId);
             for (int i = 0; i < 8; ++i) Serial.printf("%02x", handshakeResponse.token[i]);
             Serial.println();
             queueMessage(broadcastAddress, reinterpret_cast<const uint8_t *>(&handshakeResponse), sizeof(ESPNowConnectionAckMessage));
@@ -486,7 +472,7 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
 
         // Step 1: Get persistent tracker ID for this MAC address
         uint8_t trackerId;
-        if (!Configuration::getInstance().getTrackerIdForMac(senderInfo->src_addr, trackerId)) {
+        if (!Configuration::getInstance().getTrackerIdForMac(mac, trackerId)) {
             Serial.println("[ESPNOW] Failed to resolve tracker ID. Tracker capacity may be reached.");
             return;
         }
@@ -496,20 +482,20 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
         handshakeResponse.trackerId = trackerId;
         handshakeResponse.channel = channel;
         memcpy(handshakeResponse.token, handshake.token, 8);
-        memcpy(handshakeResponse.targetAddr, senderInfo->src_addr, 6);
-        // Serial.printf("Sending handshake ack to " MACSTR " with tracker ID %d\n", MAC2ARGS(senderInfo->src_addr), trackerId);
+        memcpy(handshakeResponse.targetAddr, mac, 6);
+        // Serial.printf("Sending handshake ack to " MACSTR " with tracker ID %d\n", MAC2ARGS(mac), trackerId);
         queueMessage(broadcastAddress, reinterpret_cast<const uint8_t *>(&handshakeResponse), sizeof(ESPNowConnectionAckMessage));
 
         // Step 3: Add tracker to connected list with heartbeat tracking
         Tracker newTracker;
-        memcpy(newTracker.mac.data(), senderInfo->src_addr, 6);
+        memcpy(newTracker.mac.data(), mac, 6);
         newTracker.trackerId = trackerId;
         newTracker.waitingForResponse = false;
         newTracker.missedPings = 0;
         newTracker.lastDeltaTime = millis();
         connectedTrackers.push_back(newTracker);
 
-        Serial.printf("Connected tracker " MACSTR " (ID: %d)\n", MAC2ARGS(senderInfo->src_addr), trackerId);
+        Serial.printf("Connected tracker " MACSTR " (ID: %d)\n", MAC2ARGS(mac), trackerId);
 
         uint8_t registrationPacket[16] = {0};
         PacketHandling::getInstance().createRegistrationReport(registrationPacket, newTracker);
@@ -524,7 +510,7 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
     }
     case ESPNowMessageTypes::HEARTBEAT_ECHO: {
         // Fast MAC lookup for connected tracker
-        const uint8_t *mac = senderInfo->src_addr;
+        const uint8_t *mac = mac;
         Tracker *tracker = getTracker(mac);
         if (tracker == nullptr) return;
         tracker->missedPings = 0;
@@ -538,7 +524,7 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
     }
     case ESPNowMessageTypes::HEARTBEAT_RESPONSE: {
         // Find the tracker and update heartbeat info
-        const uint8_t *mac = senderInfo->src_addr;
+        const uint8_t *mac = mac;
         Tracker *tracker = getTracker(mac);
         if (tracker == nullptr) return;
         if (tracker->waitingForResponse) {
@@ -548,7 +534,7 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
                 tracker->latency = static_cast<uint8_t>(latency);
                 tracker->waitingForResponse = false;
                 tracker->missedPings = 0;
-                tracker->rssi = senderInfo->rx_ctrl->rssi;
+                tracker->rssi = 0;
             }
             // If sequence number doesn't match, ignore the response (likely stale)
         }
@@ -556,7 +542,7 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
     }
     case ESPNowMessageTypes::ENTER_OTA_ACK:{
         // Find the tracker and mark it as in OTA
-        const uint8_t *mac = senderInfo->src_addr;
+        const uint8_t *mac = mac;
         Tracker *tracker = getTracker(mac);
         if (tracker == nullptr) return;
 
@@ -568,202 +554,12 @@ void ESPNowCommunication::handleMessage(const esp_now_recv_info_t *senderInfo, c
     }
 }
 
-// Store total bytes seen per channel (channels 1-11)
-static uint32_t channelBytesSeen[12] = {0};
-
 static std::set<uint64_t> channelBSSIDs[12];
 
-void ESPNowCommunication::rxPromiscuousPacket(void* buf, wifi_promiscuous_pkt_type_t type) {
-    wifi_promiscuous_pkt_t* pkt = (wifi_promiscuous_pkt_t*)buf;
-    int len = pkt->rx_ctrl.sig_len;
-    int channel = WiFi.channel();
-    int8_t rssi = pkt->rx_ctrl.rssi;
-    
-    // Detect and print WiFi beacon frames (SSID broadcasts)
-    if (type == WIFI_PKT_MGMT) {
-        // WiFi management frame structure
-        const uint8_t* payload = pkt->payload;
-        const uint8_t frameType = payload[0];
-        
-        // Check if this is a beacon frame (type 0x80)
-        if (frameType == 0x80) {
-            // SSID is in the tagged parameters starting at offset 36
-            const uint8_t* ssidTag = &payload[36];
-            
-            // Check if SSID tag is present (tag number 0)
-            if (len >= 38 && ssidTag[0] == 0) {
-                uint8_t ssidLen = ssidTag[1];
-                // Include hidden SSIDs (ssidLen == 0) and visible SSIDs
-                if (ssidLen <= 32 && (36 + 2 + ssidLen) <= len) {
-                    char ssid[33] = {0};
-                    if (ssidLen > 0) {
-                        memcpy(ssid, &ssidTag[2], ssidLen);
-                        ssid[ssidLen] = '\0';
-                    }
-                    
-                    // Extract BSSID (MAC address of AP) from offset 16
-                    const uint8_t* bssid = &payload[16];
-                    
-                    // Convert BSSID to uint64_t for set storage
-                    uint64_t bssidKey = 0;
-                    for (int i = 0; i < 6; i++) {
-                        bssidKey = (bssidKey << 8) | bssid[i];
-                    }
-                    
-                    // Track unique BSSID for this channel (includes hidden SSIDs)
-                    if (channel >= 1 && channel <= 11 && rssi >= -70) {
-                        channelBSSIDs[channel].insert(bssidKey);
-                    }
-                }
-            }
-        }
-    }
-    
-    // Define a multiplier based on RSSI: stronger signals get higher multiplier
-    // Example: RSSI >= -60: x4, -70 to -61: x3, -80 to -71: x2, else x1
-    int multiplier = 1;
-    if (rssi >= -20) {
-        multiplier = 9;
-    } else if (rssi >= -30) {
-        multiplier = 8;
-    } else if (rssi >= -40) {
-        multiplier = 7;
-    } else if (rssi >= -50) {
-        multiplier = 6;
-    } else if (rssi >= -60) {
-        multiplier = 4;
-    } else if (rssi >= -70) {
-        multiplier = 3;
-    } else if (rssi >= -80) {
-        multiplier = 2;
-    }
-    if (channel >= 1 && channel <= 11) {
-        channelBytesSeen[channel] += len * multiplier;
-    }
-    // Optionally print debug info
-    //Serial.printf("Promiscuous packet received: type=%d, len=%d, channel=%d, rssi=%d, mult=%d, total=%u\n", type, len, channel, rssi, multiplier, channelBytesSeen[channel]);
-}
-
 void ESPNowCommunication::scanningLoop() {
-    if (!enteredPromiscuousMode) {
-        //Reset channel byte counts and BSSID tracking
-        memset(channelBytesSeen, 0, sizeof(channelBytesSeen));
-        for (int i = 0; i < 12; i++) channelBSSIDs[i].clear();
-
-        if (pairing) exitPairingMode();
-
-        statusManager.setStatus(SlimeVR::Status::SCANNING, true);
-        disconnectAllTrackers(); // Ensure all trackers are disconnected before scanning
-        WiFi_Platform_SetChannel(1);
-        scanningChannelStartTime = millis();
-        auto result = esp_wifi_set_promiscuous(true);
-        if (result != ESP_OK) {
-            Serial.printf("Failed to enter promiscuous mode: %s\n", espNowErrorToString(result).c_str());
-            return;
-        }
-        esp_wifi_set_promiscuous_filter(&filt);
-        esp_wifi_set_promiscuous_rx_cb([](void* buf, wifi_promiscuous_pkt_type_t type) {
-            ESPNowCommunication::getInstance().rxPromiscuousPacket(buf, type);
-        });
-        enteredPromiscuousMode = true;
-        Serial.println("Entered promiscuous mode for environment scanning");
-
-        scanningTime = scansRun >= 1 ? scanningChannelDuration*2 : scanningChannelDuration;
-
-        if (SlimeVR::SerialCom::comEnabled()) {
-            SlimeVR::SerialComMessages::EnvironmentScanMode::print(scanningTime);
-            SlimeVR::SerialComMessages::TrackerUpdate::print(0, 0);
-        }
-    }
-
-    // Print current channel metrics every second
-    static unsigned long lastMetricsPrint = 0;
-    if (millis() - lastMetricsPrint >= 1000) {
-        lastMetricsPrint = millis();
-        uint8_t currentChannel = WiFi.channel();
-        size_t uniqueBSSIDs = channelBSSIDs[currentChannel].size();
-        unsigned long elapsedTime = millis() - scanningChannelStartTime;
-        if (SlimeVR::SerialCom::comEnabled()) {
-            SlimeVR::SerialComMessages::EnvironmentScanProgress::print(currentChannel, channelBytesSeen[currentChannel], uniqueBSSIDs, elapsedTime, scanningTime);
-        } else Serial.printf("Scanning Channel %2d: %10u score, %u APs (%lu ms elapsed)\n", currentChannel, channelBytesSeen[currentChannel], uniqueBSSIDs , elapsedTime);
-    }
-    
-    if (millis() - scanningChannelStartTime >= scanningTime) {
-        uint8_t currentChannel = WiFi.channel();
-        if (currentChannel >= 11) {
-            // Finished scanning all channels
-            scansRun++;
-            esp_wifi_set_promiscuous(false);
-            enteredPromiscuousMode = false;
-            Serial.println("Exited promiscuous mode, finished environment scanning");
-            // Print channel statistics
-            if (!SlimeVR::SerialCom::comEnabled()) Serial.println("Channel activity summary:");
-
-            //Multiply each channel by the amount of APs observed
-            for (int ch = 1; ch <= 11; ++ch) {
-                size_t uniqueAPs = channelBSSIDs[ch].size();
-                channelBytesSeen[ch] *= (1 + uniqueAPs);
-            }
-
-            // Find the channel with the lowest byte count
-            uint32_t minBytes = channelBytesSeen[1];
-            int bestChannel = 1;
-            // Track min for primary channels
-            int primaryChannels[3] = {1, 6, 11};
-            int bestPrimary = -1;
-            uint32_t minPrimaryBytes = UINT32_MAX;
-            if (!SlimeVR::SerialCom::comEnabled()) {
-                for (int ch = 1; ch <= 11; ++ch) {
-                    size_t uniqueAPs = channelBSSIDs[ch].size();
-                    Serial.printf("Channel %2d: %10u score, %u unique APs\n", ch, channelBytesSeen[ch], uniqueAPs);
-                    if (channelBytesSeen[ch] < minBytes) {
-                        minBytes = channelBytesSeen[ch];
-                        bestChannel = ch;
-                    }
-                }
-            }
-            // Check if any primary channel is as good as the best
-            for (int i = 0; i < 3; ++i) {
-                int ch = primaryChannels[i];
-                if (channelBytesSeen[ch] <= minBytes * 1.1) { // Allow up to 10% worse than absolute best
-                    if (channelBytesSeen[ch] < minPrimaryBytes) {
-                        minPrimaryBytes = channelBytesSeen[ch];
-                        bestPrimary = ch;
-                    }
-                }
-            }
-
-            int selected = 0;
-            if (bestPrimary != -1) {
-                if (!SlimeVR::SerialCom::comEnabled()) Serial.printf("Best channel to use (primary preferred): %d (activity: %u score)\n", bestPrimary, channelBytesSeen[bestPrimary]);
-                Configuration::getInstance().setWifiChannel((uint8_t)bestPrimary);
-                selected = bestPrimary;
-            } else {
-                if (!SlimeVR::SerialCom::comEnabled()) Serial.printf("Best channel to use: %d (lowest activity: %u score)\n", bestChannel, minBytes);
-                Configuration::getInstance().setWifiChannel((uint8_t)bestChannel);
-                selected = bestChannel;
-            }
-
-            delay(100); // Short delay to ensure all promiscuous mode operations have settled before restarting WiFi
-
-            scanningEnvironment = false;
-            statusManager.setStatus(SlimeVR::Status::SCANNING, false);
-            if (SlimeVR::SerialCom::comEnabled()) {
-                SlimeVR::SerialComMessages::EnvironmentScanResults::print(channelBytesSeen, selected);
-                SlimeVR::SerialComMessages::EnvironmentScanMode::print(0);
-            }
-
-            //Restart wifi
-            begin();
-        } else {
-            // Move to next channel
-            WiFi_Platform_SetChannel(WiFi.channel() + 1);
-            scanningChannelStartTime = millis();
-            // Calculate scan progress percentage (channels 1-11)
-            int percent = ((currentChannel) * 100) / 11;
-            Serial.printf("Switched to channel %d for scanning (%d%% complete)\n", currentChannel + 1, percent);
-        }
-    }
+    // ESP8266 does not support promiscuous mode
+    Serial.println("Wifi Promiscuous mode scanning not supported on ESP8266");
+    return;
 }
 
 // Main update loop to be called regularly
@@ -840,7 +636,7 @@ void ESPNowCommunication::update() {
         // Create and send heartbeat echo message with sequence number
         // Serial.printf("Sending heartbeat echo to trackers with sequence number %u\n", heartbeatMsg.sequenceNumber);
         auto lastExpectedSequenceNumber = expectedSequenceNumber;
-        expectedSequenceNumber = static_cast<uint16_t>(esp_random() & 0xFFFF);
+        expectedSequenceNumber = static_cast<uint16_t>(os_random() & 0xFFFF);
         if (expectedSequenceNumber == lastExpectedSequenceNumber) expectedSequenceNumber = (expectedSequenceNumber + 1) % 0x10000;
         ESPNowHeartbeatEchoMessage heartbeatMsg;
         heartbeatMsg.sequenceNumber = expectedSequenceNumber;
@@ -969,23 +765,10 @@ void ESPNowCommunication::update() {
 
 // Converts ESPNOW error codes to human-readable strings
 std::string ESPNowCommunication::espNowErrorToString(esp_err_t error) {
+    // ESP8266's espnow.h library doesn't include anything on the different error codes
     switch (error) {
     case ESP_OK:
         return "ESP_OK";
-    case ESP_ERR_ESPNOW_NOT_INIT:
-        return "ESP_ERR_ESPNOW_NOT_INIT";
-    case ESP_ERR_ESPNOW_ARG:
-        return "ESP_ERR_ESPNOW_ARG";
-    case ESP_ERR_ESPNOW_NO_MEM:
-        return "ESP_ERR_ESPNOW_NO_MEM";
-    case ESP_ERR_ESPNOW_FULL:
-        return "ESP_ERR_ESPNOW_FULL";
-    case ESP_ERR_ESPNOW_NOT_FOUND:
-        return "ESP_ERR_ESPNOW_NOT_FOUND";
-    case ESP_ERR_ESPNOW_INTERNAL:
-        return "ESP_ERR_ESPNOW_INTERNAL";
-    case ESP_ERR_ESPNOW_EXIST:
-        return "ESP_ERR_ESPNOW_EXIST";
     default:
         return "UNKNOWN_ERROR - " + std::to_string(error);
     }
@@ -994,25 +777,16 @@ std::string ESPNowCommunication::espNowErrorToString(esp_err_t error) {
 // Adds a ESP-Now peer with the given MAC address
 uint8_t ESPNowCommunication::addPeer(const uint8_t peerMac[6], bool defaultConfig) {
     // Check if peer already exists
-    if (esp_now_is_peer_exist(peerMac)) {
+    if (esp_now_is_peer_exist((uint8_t *) peerMac)) {
         Serial.printf("Peer " MACSTR " already exists.\n", MAC2ARGS(peerMac));
         return ESP_OK; // Peer already exists, return success
     }
 
     //Serial.printf("Adding peer " MACSTR "\n", MAC2ARGS(peerMac));
-
-    esp_now_peer_info_t peer;
-    memset(&peer, 0, sizeof(esp_now_peer_info_t));
-    memcpy(peer.peer_addr, peerMac, sizeof(uint8_t[6]));
-    peer.channel = 0;
-    peer.encrypt = false;
-    peer.ifidx = WIFI_IF_STA;
-
-    esp_err_t result = esp_now_add_peer(&peer);
+    uint8_t channel = wifi_get_channel();
+    esp_err_t result = esp_now_add_peer((uint8_t *)peerMac, ESP_NOW_ROLE_CONTROLLER, channel, NULL, 0);
     if (result != ESP_OK) {
         Serial.printf("Failed to add peer, error: %s\n", espNowErrorToString(result).c_str());
-    } else if (!defaultConfig){
-        esp_now_set_peer_rate_config(peer.peer_addr, &rate_config);
     }
     return result;
 }
@@ -1024,14 +798,14 @@ uint8_t ESPNowCommunication::addPeer(const uint8_t peerMac[6]) {
 
 // Deletes a ESP-Now peer with the given MAC address
 bool ESPNowCommunication::deletePeer(const uint8_t peerMac[6]) {
-    if (!esp_now_is_peer_exist(peerMac)) {
-        Serial.printf("Peer " MACSTR " does not exist.\n", MAC2ARGS(peerMac));
+    if (!esp_now_is_peer_exist((uint8_t *) peerMac)) {
+        Serial.printf("Peer " MACSTR " does not exist.\n", MAC2ARGS((uint8_t *) peerMac));
         return true; // Peer does not exist, return success
     }
 
-    //Serial.printf("Deleting peer " MACSTR "\n", MAC2ARGS(peerMac));
-    auto result = esp_now_del_peer(peerMac);
-    if (result != ESP_OK || esp_now_is_peer_exist(peerMac)) Serial.printf("Failed to delete peer " MACSTR ", error: %s\n", MAC2ARGS(peerMac), espNowErrorToString(result).c_str());
+    //Serial.printf("Deleting peer " MACSTR "\n", MAC2ARGS((uint8_t *) peerMac));
+    auto result = esp_now_del_peer((uint8_t *) peerMac);
+    if (result != ESP_OK || esp_now_is_peer_exist((uint8_t *) peerMac)) Serial.printf("Failed to delete peer " MACSTR ", error: %s\n", MAC2ARGS(peerMac), espNowErrorToString(result).c_str());
 
 	//Remove all pending messages to this peer from the send queue by setting the ignore flag
 	for (size_t i = 0; i < maxQueueSize; ++i) if (memcmp(sendQueue[i].peerMac, peerMac, 6) == 0) sendQueue[i].skip = true; // Mark message to be skipped
@@ -1051,18 +825,7 @@ void ESPNowCommunication::startOtaUpdate(const uint8_t auth[16], long port, cons
 }
 
 void ESPNowCommunication::exitEnvironmentScanningMode() {
-    if (enteredPromiscuousMode) {
-        auto result = esp_wifi_set_promiscuous(false);
-        if (result != ESP_OK) Serial.printf("Failed to exit promiscuous mode, error: %s\n", espNowErrorToString(result).c_str());
-        enteredPromiscuousMode = false;
-        Serial.println("Exited promiscuous mode, stopping environment scanning");
-    }
-    begin();
-    scanningEnvironment = false;
-    statusManager.setStatus(SlimeVR::Status::SCANNING, false);
-    if (SlimeVR::SerialCom::comEnabled()) {
-        SlimeVR::SerialComMessages::EnvironmentScanMode::print(0);
-    }
+    return;
 }
 
 void ESPNowCommunication::UnpairAllTrackers() {

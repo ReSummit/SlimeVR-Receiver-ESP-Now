@@ -1,6 +1,6 @@
 #include "ScanEnvCommand.h"
 
-#include "../espnow/espnow.h"
+#include "hal/common_espnow.h"
 
 bool handleScanEnvCommand(const String &command) {
     if (!command.equalsIgnoreCase("scanenv")) {

@@ -1,4 +1,9 @@
+#pragma once
+
 #include <Arduino.h>
+
+#if defined(ARDUINO_ARCH_ESP32)
+
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
@@ -154,3 +159,89 @@ public:
 #endif
 
 extern HybridSerial Serial;
+
+#elif defined(ARDUINO_ARCH_ESP8266)
+
+/**
+ * Because the ESP8266 or other MCUs don't have HID, we have to redefine HybridSerial
+ * To maximize data throughput, we use the highest baud rate possible, which is 921600 baud
+ * 921600 baud is typically the flash speed, so we should be able to comfortably handle 10 trackers with secondary trackers
+ * (Note: This is 92160 Bytes / second. Each tracker transmits at around 1600 Bytes / second
+ *            so for 10 we need at least 16000 Bytes / second plus some overhead.)
+ */
+#ifndef SLIME_SERIAL_BAUD
+#define SLIME_SERIAL_BAUD 921600
+#endif
+
+class HybridSerial : public Stream {
+private:
+    // We don't have FreeRTOS for ESP8266, so semephores are removed.
+    HardwareSerial* uart;
+
+public:
+    HybridSerial() : uart() { }
+    
+    void begin(unsigned long baud = SLIME_SERIAL_BAUD) {
+        uart->begin(baud);
+    }
+    
+    size_t write(uint8_t c) override {
+        return uart->write(c);
+    }
+
+    size_t write(const uint8_t *buffer, size_t size) override {
+        return uart->write(buffer, size);
+    }
+    
+    size_t printf(const char *format, ...) {        
+        va_list args;
+        va_start(args, format);
+        char buffer[256];
+        int len = vsnprintf(buffer, sizeof(buffer), format, args);
+        va_end(args);
+        
+        if (len < 0 ) return 0;
+
+        return uart->write((const uint8_t*) buffer, len);
+    }
+
+    size_t writeLine(const uint8_t *buffer, size_t size) {
+        size_t n = uart->write(buffer, size);
+        n += uart->write((const uint8_t*)"\r\n", 2);
+        uart->flush();
+        return n;
+    }
+
+    size_t writeLine(const char* s) {
+        return writeLine((const uint8_t*)s, strlen(s));
+    }
+    
+    size_t println() {
+        return writeLine((const uint8_t*)"", 0);
+    }
+    
+    size_t println(const char* s) {
+        return writeLine(s);
+    }
+    
+    size_t println(const String& s) {
+        return println(s.c_str());
+    }
+    
+    // Read from both (USB has priority, then UART)
+    int available() override { return uart->available(); }
+    int read() override { return uart->read(); }
+    int peek() override { return uart->peek(); }
+    
+    void flush() override { uart->flush(); }
+    
+    // Expose operator bool for connection checking
+    operator bool() const {
+        return *uart;
+    }
+};
+
+extern HybridSerial SlimeSerial;
+#define Serial SlimeSerial
+
+#endif

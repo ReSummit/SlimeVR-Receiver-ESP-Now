@@ -4,7 +4,7 @@
 #include "MessageBuilder.h"
 #include "./SerialCom.h"
 #include "../GlobalVars.h"
-#include "../Configuration.h"
+#include "../configuration.h"
 
 namespace SlimeVR
 {

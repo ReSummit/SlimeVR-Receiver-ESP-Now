@@ -1,6 +1,6 @@
 #include "PairCommand.h"
 
-#include "../espnow/espnow.h"
+#include "hal/common_espnow.h"
 
 bool handlePairCommand(const String &command) {
     if (!command.equalsIgnoreCase("pair")) {

@@ -1,6 +1,6 @@
 #include "StartOtaUpdateCommand.h"
 
-#include "../espnow/espnow.h"
+#include "hal/common_espnow.h"
 #include "CommandParsing.h"
 
 bool handleStartOtaUpdateCommand(const String &command) {

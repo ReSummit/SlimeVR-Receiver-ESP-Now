@@ -1,6 +1,6 @@
-#pragma once
+#if defined(ARDUINO_ARCH_ESP8266)
 
-#if defined(ARDUINO_ARCH_ESP32)
+#pragma once
 
 #include "error_codes.h"
 #include "espnow/messages.h"
@@ -29,7 +29,8 @@ class ESPNowCommunication {
             uint32_t lastRegistrationTime = 0; // Timestamp of when the tracker was registered
         };
         
-        static constexpr size_t packetSizeBytes = 128;
+        // NOTE: To reduce RAM on 8266, this needed to be modified from 128 to 32
+        static constexpr size_t packetSizeBytes = 32;
 
         static unsigned int channel;
 
@@ -65,7 +66,8 @@ class ESPNowCommunication {
         void startOtaUpdate(const uint8_t auth[16], long port, const uint8_t ip[4], const char ssid[33], const char password[65]);
 
         void enterEnvironmentScanningMode() { 
-            scanningEnvironment = true;
+            Serial.println("Wifi Promiscuous mode scanning not supported on ESP8266");
+            scanningEnvironment = false;
         }
         void exitEnvironmentScanningMode();
         bool isScanningEnvironment() const { return scanningEnvironment; }
@@ -77,14 +79,12 @@ class ESPNowCommunication {
         static ESPNowCommunication instance;
         ESPNowCommunication() = default;
 
-        esp_now_rate_config_t rate_config;
-
         void invokeTrackerConnectedEvent(Tracker tracker);
         void invokeTrackerDisconnectedEvent(Tracker tracker);
         void sendRateUpdateToAllTrackers();
 
-        static void onReceive(const esp_now_recv_info_t *senderInfo, const uint8_t *data, int dataLen);
-        void __attribute__((hot)) __attribute__((flatten)) handleMessage(const esp_now_recv_info_t *senderInfo, const uint8_t *data, int dataLen);
+        static void onReceive(uint8_t *mac, uint8_t *data, uint8_t dataLen);
+        void __attribute__((hot)) __attribute__((flatten)) handleMessage(uint8_t *mac, uint8_t *data, uint8_t dataLen);
 
         uint8_t addPeer(const uint8_t peerMac[6]);
         uint8_t addPeer(const uint8_t peerMac[6], bool defaultConfig);
@@ -128,7 +128,9 @@ class ESPNowCommunication {
             bool isHeartbeat;
             bool skip = false;
         };
-        static constexpr size_t maxQueueSize = 64;
+
+        // NOTE: To reduce RAM on 8266, this needed to be modified from 64 to 16
+        static constexpr size_t maxQueueSize = 16;
         PendingMessage sendQueue[maxQueueSize];
         size_t queueHead = 0;
         size_t queueTail = 0;
@@ -142,17 +144,6 @@ class ESPNowCommunication {
         void queueMessage(const uint8_t peerMac[6], const uint8_t *data, size_t dataLen, bool isHeartbeat);
         void queueMessage(const uint8_t peerMac[6], const uint8_t *data, size_t dataLen);
         void processSendQueue();
-
-        // Mutex for protecting send queue (thread safety)
-        SemaphoreHandle_t queueMutex = nullptr;
-        // RAII helper for mutex locking
-        class MutexLock {
-        public:
-            MutexLock(SemaphoreHandle_t mutex) : m(mutex) { if (m) xSemaphoreTake(m, portMAX_DELAY); }
-            ~MutexLock() { if (m) xSemaphoreGive(m); }
-        private:
-            SemaphoreHandle_t m;
-        };
 
         std::string espNowErrorToString(esp_err_t error);
 
@@ -169,14 +160,12 @@ class ESPNowCommunication {
         unsigned long ota_start_time = 0;
         unsigned long ota_last_send_time = 0;
 
-        const wifi_promiscuous_filter_t filt={.filter_mask=WIFI_PROMIS_FILTER_MASK_ALL | WIFI_PROMIS_CTRL_FILTER_MASK_ALL};
         bool scanningEnvironment = false;
         bool enteredPromiscuousMode = false;
         long unsigned long scanningChannelStartTime = 0;
         int scanningTime = 0;
         long unsigned int scanningChannelDuration = 5000; // 5 seconds per channel
         void scanningLoop();
-        void rxPromiscuousPacket(void* buf, wifi_promiscuous_pkt_type_t type);
         int scansRun = 0;
 
         static constexpr unsigned long registrationIntervalMs = 500; // 0.5 second

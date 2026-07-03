@@ -1,5 +1,6 @@
 #include "button.h"
 
+#include "hal/common.h"
 #include "pins_arduino.h"
 
 void IRAM_ATTR button_isr() {

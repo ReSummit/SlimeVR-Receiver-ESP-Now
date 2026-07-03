@@ -1,7 +1,7 @@
 #pragma once
 
 #include "HID.h"
-#include "espnow/espnow.h"
+#include "hal/common_espnow.h"
 
 #include <Arduino.h>
 #include <CircularBuffer.hpp>

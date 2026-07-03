@@ -1,8 +1,8 @@
 #include "configuration.h"
 #include <Arduino.h>
 #include <algorithm>
-#include <WiFi.h>
-#include "espnow/espnow.h"
+#include "hal/common.h"
+#include "hal/common_espnow.h"
 #include "./serialCom/SerialCom.h"
 
 #define DEFAULT_WIFI_CHANNEL 6
@@ -40,12 +40,12 @@ void Configuration::forEachPairedTracker(std::function<void(const uint8_t mac[6]
 }
 
 void Configuration::setWifiChannel(uint8_t channel) {
-    auto result = WiFi.setChannel(channel);
+    auto result = WiFi_Platform_SetChannel(channel);
     if (result != 0) {
         Serial.printf("[Config] Failed to set WiFi channel to %d - error %d\n", channel, result);
         return;
     }
-    auto file = LittleFS.open(wifiChannelPath, "w", true);
+    auto file = LittleFS_Platform_Open(wifiChannelPath, "w", true);
     file.write(&channel, 1);
     file.close();
     ESPNowCommunication::channel = channel;
@@ -169,7 +169,7 @@ void Configuration::getSecurityCode(uint8_t securityCode[8]) {
         }
         
         // Save to file
-        auto file = LittleFS.open(securityCodePath, "w", true);
+        auto file = LittleFS_Platform_Open(securityCodePath, "w", true);
         file.write(securityCode, 8);
         file.close();
         

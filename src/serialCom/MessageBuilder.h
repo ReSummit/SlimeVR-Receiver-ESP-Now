@@ -1,6 +1,6 @@
 #include <cstdint>
 #include <string>
-#include "../espnow/espnow.h"
+#include "hal/common_espnow.h"
 
 #pragma once
 

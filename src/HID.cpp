@@ -1,3 +1,5 @@
+#if !defined(ARDUINO_ARCH_ESP8266)
+
 #include "HID.h"
 #include "GlobalVars.h"
 #include "serialCom/SerialCom.h"
@@ -93,3 +95,5 @@ bool HIDDevice::ready() {
 }
 
 bool HIDDevice::initialized = false;
+
+#endif

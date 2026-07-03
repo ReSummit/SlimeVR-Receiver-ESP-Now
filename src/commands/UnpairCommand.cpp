@@ -1,7 +1,7 @@
 #include "UnpairCommand.h"
 
 #include "../configuration.h"
-#include "../espnow/espnow.h"
+#include "hal/common_espnow.h"
 #include "CommandParsing.h"
 
 bool handleUnpairCommand(const String &command) {

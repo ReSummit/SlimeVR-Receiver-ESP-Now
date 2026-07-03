@@ -1,6 +1,6 @@
 #include "GetChannelCommand.h"
 
-#include <WiFi.h>
+#include "hal/common.h"
 
 bool handleGetChannelCommand(const String &command) {
     if (!command.equalsIgnoreCase("getchannel")) {

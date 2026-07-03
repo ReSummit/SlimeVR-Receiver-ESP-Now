@@ -1,5 +1,12 @@
 #pragma once
 
+/**
+ * On an ESP8266, HID is not available, so will hit compile errors if included
+ * If it is an ESP32 otherwise, HID will be available, but there are no checks for S2 / S3 specifically
+ * TODO: Gate on S2 / S3 HID compatibility
+ */
+#if !defined(ARDUINO_ARCH_ESP8266)
+
 #include <USBHID.h>
 #include <cstddef>
 #include <cstdint>
@@ -35,3 +42,5 @@ private:
     static bool initialized;
     USBHID HID;
 };
+
+#endif

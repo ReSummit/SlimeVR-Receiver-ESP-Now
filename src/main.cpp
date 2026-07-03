@@ -1,21 +1,26 @@
 #include "ConsoleCommandHandler.h"
-#include "HID.h"
 #include "button.h"
 #include "configuration.h"
 #include "error_codes.h"
-#include "espnow/espnow.h"
+#include "hal/common_espnow.h"
 #include "packetHandling.h"
 #include "GlobalVars.h"
 #include "Serial.h"
 #include "./serialCom/SerialCom.h"
 
+#if defined(ARDUINO_ARCH_ESP32)
+#include "HID.h"
 #include "USB.h"
+
+HIDDevice hidDevice;
+#elif defined(ARDUINO_ARCH_ESP8266)
+//
+#endif
 
 #ifndef FIRMWARE_VERSION
 #define FIRMWARE_VERSION "unknown"
 #endif
 
-HIDDevice hidDevice;
 Button &button = Button::getInstance();
 ESPNowCommunication &espnow = ESPNowCommunication::getInstance();
 SlimeVR::Status::StatusManager statusManager;
@@ -28,7 +33,9 @@ void fail(ErrorCodes errorCode) {
 }
 
 void setup() {
+    #ifdef ARDUINO_ARCH_ESP32
     hidDevice.begin();
+    #endif
     Serial.printf("Starting up " USB_PRODUCT  "  - " FIRMWARE_VERSION "\n");
 
     statusManager.setStatus(SlimeVR::Status::LOADING, true);

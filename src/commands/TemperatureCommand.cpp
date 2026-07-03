@@ -13,7 +13,7 @@ bool handleTemperatureCommand(const String &command) {
         return false;
     }
 
-    float tempC = temperatureRead(); // Convert to Celsius
+    float tempC = platformTemperature(); // Convert to Celsius
     
     Serial.printf("[CMD] Chip temperature: %.2f°C\n", tempC);
     return true;

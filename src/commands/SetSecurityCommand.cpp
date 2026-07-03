@@ -3,7 +3,7 @@
 #include <LittleFS.h>
 
 #include "../configuration.h"
-#include "../espnow/espnow.h"
+#include "hal/common_espnow.h"
 #include "CommandParsing.h"
 
 bool handleSetSecurityCommand(const String &command) {
@@ -24,7 +24,7 @@ bool handleSetSecurityCommand(const String &command) {
         return true;
     }
 
-    auto file = LittleFS.open("/securityCode.bin", "w", true);
+    auto file = LittleFS_Platform_Open("/securityCode.bin", "w", true);
     file.write(code, 8);
     file.close();
 

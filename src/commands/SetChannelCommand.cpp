@@ -1,7 +1,7 @@
 #include "SetChannelCommand.h"
 
 #include "../configuration.h"
-#include "../espnow/espnow.h"
+#include "hal/common_espnow.h"
 
 bool handleSetChannelCommand(const String &command) {
     if (!command.startsWith("setchannel ")) {
