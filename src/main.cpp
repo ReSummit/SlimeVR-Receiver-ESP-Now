@@ -30,6 +30,7 @@ void fail(ErrorCodes errorCode) {
     abort();
 }
 
+#if !defined(ARDUINO_USB_MODE) && defined(SERIAL_USB_ONLY)
 void beginSerial() {
     uint8_t mac[6];
     if (WiFi.getMode() == WIFI_MODE_NULL) {
@@ -42,10 +43,11 @@ void beginSerial() {
     char usbSerial[20] = "SVRDG";
     // Append full MAC address (12 hex digits) to serial string
     snprintf(usbSerial + 5, sizeof(usbSerial) - 5, "%02X%02X%02X%02X%02X%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-    Serial.begin(921600);
+    Serial.begin(SERIAL_BAUD_RATE);
     delay(10);
     Serial.printf("Serial Only Mode setup complete, please run the slimevr_serial_bridge.py program to begin.");
 }
+#endif
 
 void setup() {
     #if defined(ARDUINO_USB_MODE) && !defined(SERIAL_USB_ONLY)

@@ -63,7 +63,7 @@ public:
         writeMutex = xSemaphoreCreateMutexStatic(&mutexBuffer);
     }
     
-    void begin(unsigned long baud = 921600) {
+    void begin(unsigned long baud = SERIAL_BAUD_RATE) {
         uart->begin(baud);
     }
     
