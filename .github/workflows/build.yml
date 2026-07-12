@@ -44,12 +44,19 @@ jobs:
         with:
           python-version: '3.x'
 
+      # Caches tools/frameworks (~/.platformio) plus the per-env build tree and
+      # ESP-IDF managed components. The build tree matters most for the C2 env,
+      # which compiles ESP-IDF from source — restoring .pio/managed_components
+      # lets SCons rebuild only changed files (minutes -> seconds on repeat runs).
+      # Per-env key + SCons content signatures keep incremental builds correct.
       - name: Cache PlatformIO
         uses: actions/cache@v4
         with:
           path: |
             ~/.platformio
             ~/.cache/pip
+            .pio
+            managed_components
           key: pio-${{ runner.os }}-${{ matrix.env }}-${{ hashFiles('platformio.ini') }}
           restore-keys: |
             pio-${{ runner.os }}-${{ matrix.env }}-
