@@ -1,6 +1,8 @@
 #pragma once
 
-#if defined(ARDUINO_USB_MODE) && !defined(SERIAL_USB_ONLY)
+#include "usb_mode.h"
+
+#if USE_USB_HID
 #include "HID.h"
 #endif
 
@@ -22,7 +24,7 @@ public:
     void insertPriority(const uint8_t *data, uint8_t len);
     void sendDisconnectionStatus(uint8_t trackerId);
 
-    #if defined(ARDUINO_USB_MODE) && !defined(SERIAL_USB_ONLY)
+    #if USE_USB_HID
     void tick(HIDDevice &hidDevice);
     #else
     void tick();

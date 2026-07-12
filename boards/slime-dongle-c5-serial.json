@@ -1,0 +1,49 @@
+{
+    "build": {
+      "arduino": {
+        "ldscript": "esp32c5_out.ld"
+      },
+      "core": "esp32",
+      "extra_flags": [
+        "-DARDUINO_SLIME_DONGLE_C5_SERIAL",
+        "-DARDUINO_USB_CDC_ON_BOOT=1",
+        "-DARDUINO_USB_MODE=1"
+      ],
+      "f_cpu": "240000000L",
+      "f_flash": "80000000L",
+      "flash_mode": "qio",
+      "hwids": [
+        [
+          "0x1209",
+          "0x7690"
+        ]
+      ],
+      "mcu": "esp32c5",
+      "variant": "slime_dongle_c5_serial"
+    },
+    "connectivity": [
+      "wifi",
+      "bluetooth"
+    ],
+    "debug": {
+      "default_tool": "esp-builtin",
+      "onboard_tools": [
+        "esp-builtin"
+      ],
+      "openocd_target": "esp32c5.cfg"
+    },
+    "frameworks": [
+      "arduino",
+      "espidf"
+    ],
+    "name": "SlimeVR ESPNow Dongle (C5, Serial Only)",
+    "upload": {
+      "flash_size": "4MB",
+      "maximum_ram_size": 393216,
+      "maximum_size": 4194304,
+      "require_upload_port": true,
+      "speed": 921600
+    },
+    "url": "https://slimevr.dev",
+    "vendor": "SlimeVR"
+  }

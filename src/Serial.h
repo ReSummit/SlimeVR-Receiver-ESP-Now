@@ -6,6 +6,7 @@
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#include "usb_mode.h"
 
 #undef Serial  // Remove the core's Serial definition
 
@@ -13,13 +14,13 @@
 #ifndef SERIAL_H
 #define SERIAL_H
 
-#if defined(ARDUINO_USB_MODE) && !defined(SERIAL_USB_ONLY)
+#if USE_USB_HID
 extern USBCDC USBSerial;
 #endif
 
 class HybridSerial : public Stream {
 private:
-    #if defined(ARDUINO_USB_MODE) && !defined(SERIAL_USB_ONLY)
+    #if USE_USB_HID
     USBCDC* usb;
     #endif
     HardwareSerial* uart;
@@ -30,7 +31,7 @@ private:
     size_t writeUnlocked(uint8_t c) {
         size_t n = 0;
         n += uart->write(c);
-        #if defined(ARDUINO_USB_MODE) && !defined(SERIAL_USB_ONLY)
+        #if USE_USB_HID
         if (usb && usb->availableForWrite() > 0) {
             n += usb->write(c);
         }
@@ -41,7 +42,7 @@ private:
     size_t writeUnlocked(const uint8_t *buffer, size_t size) {
         size_t n = 0;
         n += uart->write(buffer, size);
-        #if defined(ARDUINO_USB_MODE) && !defined(SERIAL_USB_ONLY)
+        #if USE_USB_HID
         if (usb && usb->availableForWrite() > 0) {
             n += usb->write(buffer, size);
         }
@@ -50,7 +51,7 @@ private:
     }
     
 public:
-    #if defined(ARDUINO_USB_MODE) && !defined(SERIAL_USB_ONLY)
+    #if USE_USB_HID
     HybridSerial() : uart(&Serial0), usb(&USBSerial) {
         writeMutex = xSemaphoreCreateMutexStatic(&mutexBuffer);
     }
@@ -120,7 +121,7 @@ public:
             size_t n = writeUnlocked(buffer, size);
             n += writeUnlocked((const uint8_t*)"\r\n", 2);
             uart->flush();
-            #if defined(ARDUINO_USB_MODE) && !defined(SERIAL_USB_ONLY)
+            #if USE_USB_HID
             if (usb) usb->flush();
             #endif
             xSemaphoreGive(writeMutex);
@@ -147,7 +148,7 @@ public:
     
     // Read from both (USB has priority, then UART)
     int available() override {
-        #if defined(ARDUINO_USB_MODE) && !defined(SERIAL_USB_ONLY)
+        #if USE_USB_HID
         int n = usb->available();
         if (n > 0) return n;
         #endif
@@ -156,7 +157,7 @@ public:
     }
     
     int read() override {
-        #if defined(ARDUINO_USB_MODE) && !defined(SERIAL_USB_ONLY)
+        #if USE_USB_HID
         if (usb->available()) {
             return usb->read();
         }
@@ -166,7 +167,7 @@ public:
     }
     
     int peek() override {
-        #if defined(ARDUINO_USB_MODE) && !defined(SERIAL_USB_ONLY)
+        #if USE_USB_HID
         if (usb->available()) {
             return usb->peek();
         }
@@ -179,7 +180,7 @@ public:
         if (writeMutex && xSemaphoreTake(writeMutex, portMAX_DELAY) == pdTRUE) {
             uart->flush();
 
-            #if defined(ARDUINO_USB_MODE) && !defined(SERIAL_USB_ONLY)
+            #if USE_USB_HID
             if (usb) usb->flush();
             #endif
 
@@ -188,7 +189,7 @@ public:
     }
     
     // Expose operator bool for connection checking
-    #if defined(ARDUINO_USB_MODE) && !defined(SERIAL_USB_ONLY)
+    #if USE_USB_HID
     operator bool() const {
         return *usb || *uart;
     }
