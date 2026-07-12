@@ -127,7 +127,8 @@ void PacketHandling::tick(HIDDevice &hidDevice) {
     //     }
     // }
 
-    // Prepare 64-byte transfer buffer (4 reports of 16 bytes each), but zeroed out to start
+    // Prepare 64-byte transfer buffer (4 reports of 16 bytes each)
+    static constexpr uint8_t invalidPacketType = 0xFE;
     uint8_t transferBuffer[hidTransferSize];
     memset(transferBuffer, 0, sizeof(transferBuffer));
     size_t reportsWritten = 0;
@@ -162,8 +163,18 @@ void PacketHandling::tick(HIDDevice &hidDevice) {
         }
     }
 
+    const size_t realReportsWritten = reportsWritten;
+
+    // Fill unused report slots with a full invalid report so slimevr skips these empty reports:
+    // [0] = invalid packet type, [1..15] = 0
+    while (reportsWritten < reportsPerTransfer) {
+        uint8_t *report = &transferBuffer[reportsWritten * reportSize];
+        report[0] = invalidPacketType;
+        reportsWritten++;
+    }
+
     // Only send if we have reports to send
-    if (reportsWritten > 0 && !hidDevice.send(transferBuffer, hidTransferSize)) Serial.println("[USB] Send failed");
+    if (realReportsWritten > 0 && !hidDevice.send(transferBuffer, hidTransferSize)) Serial.println("[USB] Send failed");
     // Print how long it took to send the reports for debugging
 }
 #else
