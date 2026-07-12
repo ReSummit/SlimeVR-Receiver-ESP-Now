@@ -6,3 +6,11 @@ nodeProgram/node_modules/
 /.vscode
 
 out/
+
+# ESP-IDF-from-source build spill (ESP32-C2 skeleton build drops these in the project root)
+managed_components/
+.dummy/
+sdkconfig
+sdkconfig.*
+dependencies.lock
+/CMakeLists.txt

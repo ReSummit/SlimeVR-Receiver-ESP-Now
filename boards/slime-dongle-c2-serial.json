@@ -1,0 +1,38 @@
+{
+    "build": {
+      "core": "esp32",
+      "extra_flags": [
+        "-DARDUINO_SLIME_DONGLE_C2_SERIAL"
+      ],
+      "f_cpu": "120000000L",
+      "f_flash": "60000000L",
+      "flash_mode": "qio",
+      "mcu": "esp32c2",
+      "variant": "slime_dongle_c2_serial"
+    },
+    "connectivity": [
+      "wifi"
+    ],
+    "debug": {
+      "openocd_target": "esp32c2.cfg"
+    },
+    "frameworks": [
+      "arduino",
+      "espidf"
+    ],
+    "espidf": {
+      "custom_sdkconfig": [
+        "CONFIG_IDF_TARGET=\"esp32c2\""
+      ]
+    },
+    "name": "SlimeVR ESPNow Dongle (C2, Serial Only)",
+    "upload": {
+      "flash_size": "4MB",
+      "maximum_ram_size": 278528,
+      "maximum_size": 4194304,
+      "require_upload_port": true,
+      "speed": 921600
+    },
+    "url": "https://slimevr.dev",
+    "vendor": "SlimeVR"
+  }
