@@ -104,7 +104,7 @@ void PacketHandling::createRegistrationReport(uint8_t *report, ESPNowCommunicati
     // Bytes 8-15 are reserved (already zeroed by memset)
 }
 
-#if defined(ARDUINO_USB_MODE) && !defined(SERIAL_USB_ONLY)
+#if USE_USB_HID
 void PacketHandling::tick(HIDDevice &hidDevice) {
     // PPS print every second (packet types 0-4)
     if (!hidDevice.ready()) return;

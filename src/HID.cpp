@@ -1,4 +1,6 @@
-#if defined(ARDUINO_USB_MODE) && !defined(SERIAL_USB_ONLY)
+#include "usb_mode.h"
+
+#if USE_USB_HID
 
 #include "HID.h"
 #include "GlobalVars.h"

@@ -8,6 +8,7 @@
 #include "GlobalVars.h"
 #include "Serial.h"
 #include "./serialCom/SerialCom.h"
+#include "usb_mode.h"
 
 #include "USB.h"
 
@@ -15,7 +16,7 @@
 #define FIRMWARE_VERSION "unknown"
 #endif
 
-#if defined(ARDUINO_USB_MODE) && !defined(SERIAL_USB_ONLY)
+#if USE_USB_HID
 HIDDevice hidDevice;
 #endif
 
@@ -30,7 +31,7 @@ void fail(ErrorCodes errorCode) {
     abort();
 }
 
-#if !defined(ARDUINO_USB_MODE) && defined(SERIAL_USB_ONLY)
+#if !USE_USB_HID
 void beginSerial() {
     uint8_t mac[6];
     if (WiFi.getMode() == WIFI_MODE_NULL) {
@@ -50,7 +51,7 @@ void beginSerial() {
 #endif
 
 void setup() {
-    #if defined(ARDUINO_USB_MODE) && !defined(SERIAL_USB_ONLY)
+    #if USE_USB_HID
     hidDevice.begin();
     #else
     beginSerial();
@@ -133,7 +134,7 @@ void loop() {
     // Non-blocking serial command handler
     consoleCommandHandler.update();
 
-    #if defined(ARDUINO_USB_MODE) && !defined(SERIAL_USB_ONLY)
+    #if USE_USB_HID
     PacketHandling::getInstance().tick(hidDevice);
     #else
     PacketHandling::getInstance().tick();
