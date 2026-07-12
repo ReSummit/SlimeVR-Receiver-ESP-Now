@@ -55,34 +55,56 @@ jobs:
             pio-${{ runner.os }}-${{ matrix.env }}-
             pio-${{ runner.os }}-
 
-      - name: Install PlatformIO
-        run: pip install --upgrade platformio
+      - name: Install PlatformIO & esptool
+        run: pip install --upgrade platformio esptool
 
       - name: Build ${{ matrix.env }}
         run: pio run -e ${{ matrix.env }}
 
-      # Rename the generic firmware.* outputs to the board (env) name so the files
-      # are self-describing and don't collide when several are downloaded together.
-      # For ESP32 targets we also bundle bootloader/partitions/boot_app0 so the
-      # artifact is a complete esptool-flashable set. ESP8266 skips those (they're
-      # embedded in its firmware.bin).
-      - name: Stage firmware
+      # Merge bootloader + partition table + otadata + app into ONE factory image
+      # per board, named after the board and flashable at 0x0 (esptool or the web
+      # flasher) with no per-chip offset math. The chip and its bootloader offset
+      # are read straight from the built binary, so it's correct per target
+      # (classic ESP32's bootloader is at 0x1000, every other target at 0x0).
+      # ESP8266's firmware.bin is already a complete image, so it's copied as-is.
+      - name: Merge factory image
         run: |
           src=".pio/build/${{ matrix.env }}"
-          name="${{ matrix.env }}"
+          out="out/${{ matrix.env }}.bin"
           mkdir -p out
-          cp "$src/firmware.bin" "out/$name.bin"
-          cp "$src/firmware.elf" "out/$name.elf"
           if [ -f "$src/bootloader.bin" ]; then
-            cp "$src/bootloader.bin" "out/$name-bootloader.bin"
-            cp "$src/partitions.bin" "out/$name-partitions.bin"
-            boot_app0=$(find ~/.platformio/packages -name boot_app0.bin 2>/dev/null | head -n1)
-            [ -n "$boot_app0" ] && cp "$boot_app0" "out/$name-boot_app0.bin"
+            chip=$(esptool image-info "$src/firmware.bin" 2>/dev/null \
+                   | grep -oiE 'ESP32(-[A-Z0-9]+)?' | head -1 | tr -d '-' | tr '[:upper:]' '[:lower:]')
+            [ "$chip" = esp32 ] && bl=0x1000 || bl=0x0
+            boot_app0=$(find ~/.platformio/packages -name boot_app0.bin | head -1)
+            echo "Merging $chip factory image (bootloader @ $bl) -> $out"
+            esptool --chip "$chip" merge-bin -o "$out" --flash-size keep \
+              "$bl"   "$src/bootloader.bin" \
+              0x8000  "$src/partitions.bin" \
+              0xe000  "$boot_app0" \
+              0x10000 "$src/firmware.bin"
+          else
+            cp "$src/firmware.bin" "$out"   # ESP8266: already a full flashable image
           fi
 
+      # Matrix jobs can't append to a shared artifact, so each board uploads a
+      # temporary per-board artifact; the bundle job below merges them into one.
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.env }}
+          name: bundle-${{ matrix.env }}
           path: out/
           if-no-files-found: error
+
+  # Merge every board's factory image into a single "firmware" artifact (one
+  # firmware.zip containing all the <board>.bin files) for easy release attaching.
+  bundle:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Combine per-board artifacts into one
+        uses: actions/upload-artifact/merge@v4
+        with:
+          name: firmware
+          pattern: bundle-*
+          delete-merged: true  # drop the per-board artifacts, leaving just the bundle
