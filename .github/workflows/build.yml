@@ -1,0 +1,88 @@
+name: PlatformIO CI
+
+on:
+  push:
+    branches: [esp8266, 'feature/**']
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Discover every [env:...] in platformio.ini so the build matrix stays in sync
+  # with the boards automatically (including branch-specific envs like the 8266).
+  list-envs:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.envs.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: envs
+        run: |
+          envs=$(grep -oP '^\[env:\K[^\]]+' platformio.ini \
+                 | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          echo "matrix=$envs" >> "$GITHUB_OUTPUT"
+          echo "Discovered envs: $envs"
+
+  build:
+    needs: list-envs
+    runs-on: ubuntu-latest
+    name: build (${{ matrix.env }})
+    strategy:
+      fail-fast: false  # one board failing shouldn't hide the others' results
+      matrix:
+        env: ${{ fromJson(needs.list-envs.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history + tags for scripts/firmware_version.py
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-${{ runner.os }}-${{ matrix.env }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: |
+            pio-${{ runner.os }}-${{ matrix.env }}-
+            pio-${{ runner.os }}-
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Build ${{ matrix.env }}
+        run: pio run -e ${{ matrix.env }}
+
+      # Rename the generic firmware.* outputs to the board (env) name so the files
+      # are self-describing and don't collide when several are downloaded together.
+      # For ESP32 targets we also bundle bootloader/partitions/boot_app0 so the
+      # artifact is a complete esptool-flashable set. ESP8266 skips those (they're
+      # embedded in its firmware.bin).
+      - name: Stage firmware
+        run: |
+          src=".pio/build/${{ matrix.env }}"
+          name="${{ matrix.env }}"
+          mkdir -p out
+          cp "$src/firmware.bin" "out/$name.bin"
+          cp "$src/firmware.elf" "out/$name.elf"
+          if [ -f "$src/bootloader.bin" ]; then
+            cp "$src/bootloader.bin" "out/$name-bootloader.bin"
+            cp "$src/partitions.bin" "out/$name-partitions.bin"
+            boot_app0=$(find ~/.platformio/packages -name boot_app0.bin 2>/dev/null | head -n1)
+            [ -n "$boot_app0" ] && cp "$boot_app0" "out/$name-boot_app0.bin"
+          fi
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.env }}
+          path: out/
+          if-no-files-found: error
