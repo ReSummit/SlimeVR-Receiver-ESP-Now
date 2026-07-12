@@ -32,8 +32,14 @@ public:
     void createRegistrationReport(uint8_t *report, ESPNowCommunication::Tracker tracker);
 
 private:
+    // A queued report is a fixed 16 bytes, and only this many are ever forwarded
+    // downstream (both tick() paths copy reportSize per Packet, dedup/RSSI touch
+    // bytes 0-15). Sizing Packet to match keeps the two 64-slot buffers at ~2 KB
+    // of .bss instead of 16 KB — critical headroom on the DRAM-tight ESP32-S2.
+    static constexpr size_t reportSize = 16;  // Each report is 16 bytes
+
     struct Packet {
-        uint8_t data[ESPNowCommunication::packetSizeBytes];
+        uint8_t data[reportSize];
     };
 
     PacketHandling() = default;
@@ -41,7 +47,6 @@ private:
     static PacketHandling instance;
     unsigned long lastPpsPrint = 0;
 
-    static constexpr size_t reportSize = 16;  // Each report is 16 bytes
     static constexpr size_t reportsPerTransfer = 4;  // Send 4 reports per USB transfer (64 bytes total)
     static constexpr size_t hidTransferSize = reportSize * reportsPerTransfer;  // 64 bytes total
     static constexpr size_t bufferSize = 64;
