@@ -1,3 +1,97 @@
+# SlimeVR ESP-NOW Dongle
+
+Alternative firmware for SlimeVR tracker dongles that uses the [ESP-NOW protocol](https://www.espressif.com/en/solutions/low-power-solutions/esp-now) instead of standard WiFi. ESP-NOW provides a direct device-to-device link with no router required, lower latency, and more reliable connections.
+
+A single dongle can pair up to 255 trackers, with up to 19 connected simultaneously (ESP-NOW hardware limit).
+
+## Supported Boards
+
+| Board | Chip | Data Mode |
+|-------|------|-----------|
+| Proton Dongle | ESP32-S3 | USB HID |
+| Seeed XIAO ESP32-S3 | ESP32-S3 | USB HID |
+| SlimeVR Dongle S3 | ESP32-S3 | USB HID |
+| SlimeVR Dongle S2 | ESP32-S2 | USB HID |
+| SuperMini ESP32-S3 | ESP32-S3 | USB HID |
+| SlimeVR Dongle S2 (Serial) | ESP32-S2 | Serial |
+| SlimeVR Dongle C2 | ESP32-C2 | Serial |
+| SlimeVR Dongle C5 | ESP32-C5 | Serial |
+| SlimeVR Dongle C6 | ESP32-C6 | Serial |
+
+**USB HID** boards appear as a USB device on your PC and work directly with the SlimeVR server -- no extra software needed.
+
+**Serial** boards communicate over UART and need a bridge to forward tracker data to the SlimeVR server (see [Serial Boards](#serial-boards) below).
+
+> USB HID-capable boards can also be built in serial mode for development and debugging purposes. See the `_serial` build environments in `platformio.ini` (e.g., `slime_dongle_s2_serial`).
+
+## Getting Started
+
+### Requirements
+
+- A supported dongle board (see table above)
+- Trackers running [compatible ESP-NOW firmware](https://github.com/mitzey234/SlimeVR-Tracker-ESP/tree/esp-now) (standard SlimeVR tracker firmware will not work)
+- [SlimeVR Server](https://docs.slimevr.dev/server/index.html) installed on your PC
+- For serial boards: the [serial bridge](#serial-bridge) program
+- The [SlimeVR Dongle Manager](#dongle-manager), selecting the right fork depending on the data mode.
+
+### Building and Flashing
+
+1. Install [PlatformIO](https://platformio.org/)
+2. Flash your board:
+   ```
+   pio run -e <board_env> -t upload
+   ```
+   Replace `<board_env>` with your board name from `platformio.ini` (e.g., `Proton_Dongle`, `slime_dongle_8266`).
+
+To build firmware for all boards at once:
+```
+python build_all.py
+```
+
+To add support for a new board, create a board JSON in `boards/`, a variant directory with `pins_arduino.h` under `variants/`, and a new `[env]` entry in `platformio.ini`.
+
+## Dongle Manager
+
+The [SlimeVR ESP Dongle Manager](https://github.com/ReSummit/SlimeVR-ESP-Dongle-Manager/tree/feature/serial-bridge) provides a GUI for managing the dongle -- pairing/unpairing trackers, changing WiFi channels, triggering environment scans, and monitoring tracker status without needing the physical button.
+
+> The [original Dongle Manager](https://github.com/mitzey234/SlimeVR-ESP-Dongle-Manager) supports HID boards only. Use the fork linked above if you have a serial board.
+
+> **Important:** The dongle manager's connection to the dongle and the serial bridge cannot run at the same time. Both use the serial port to communicate with the dongle, and only one can hold the connection. Close the bridge before connecting to the dongle via the dongle manager, and vice versa.
+
+## Serial Bridge
+
+Boards without USB HID (ESP32-C2/C5/C6, ESP8266) communicate over UART. The serial bridge reads framed tracker data from the dongle's serial port and forwards it to the SlimeVR server over UDP.
+
+### Running the Bridge
+
+```
+pip install pyserial
+python bridge/slimevr_serial_bridge.py
+```
+
+The bridge auto-detects the dongle's serial port and connects at 921600 baud. Tracker data is forwarded to the SlimeVR server at `127.0.0.1:6969` by default.
+
+### Bridge Options
+
+| Option | Description |
+|--------|-------------|
+| `--port <port>` | Serial port (auto-detected if omitted) |
+| `--baud <rate>` | Baud rate (default: 921600) |
+| `--forward <mode>` | Forwarding mode: `slimevr`, `udp`, `tcp-client`, or `none` (default: `slimevr`) |
+| `--forward-host <host>` | Target host (default: `127.0.0.1`) |
+| `--forward-port <port>` | Target port (default: `6969`) |
+| `--print-debug` | Echo the dongle's debug text to the terminal |
+| `--hexdump` | Hex dump of each forwarded transfer |
+| `--stats-interval <sec>` | Interval for stats output (default: `2.0`) |
+
+## OTA Updates
+
+Tracker firmware can be updated over-the-air through the dongle using the tools in `nodeProgram/`. This sends an OTA command to all connected trackers, which then download the new firmware over WiFi.
+
+---
+
+## Original README
+
 # SlimeVR HID ESPNow Dongle
 
 This is a project that implements an alternative communication method for
@@ -6,7 +100,7 @@ available on ESP devices. This dongle should allow for connecting up to 19 track
 
 ## Building and Flashing
 
-The firmware currently only supports ESP32-S2 & ESP32-S3 based devices. To get a board working, add the necessary JSON file 
+The original firmware currently only supports ESP32-S2 & ESP32-S3 based devices. This variant expands support to othe microcontrollers, provided a stable serial communication interface exists. To get a board working, add the necessary JSON file 
 in the `boards/` directory and create a new directory and `pins_arduino.h` file
 under `variants/`. After that, adding a new `env` definition in the
 platformio.ini file should work.
