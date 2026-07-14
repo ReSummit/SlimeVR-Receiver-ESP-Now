@@ -17,6 +17,7 @@ A single dongle can pair up to 255 trackers, with up to 19 connected simultaneou
 | SlimeVR Dongle C2 | ESP32-C2 | Serial |
 | SlimeVR Dongle C5 | ESP32-C5 | Serial |
 | SlimeVR Dongle C6 | ESP32-C6 | Serial |
+| SlimeVR Dongle 8266 | ESP8266 | Serial |
 
 **USB HID** boards appear as a USB device on your PC and work directly with the SlimeVR server -- no extra software needed.
 
@@ -83,6 +84,14 @@ The bridge auto-detects the dongle's serial port and connects at 921600 baud. Tr
 | `--print-debug` | Echo the dongle's debug text to the terminal |
 | `--hexdump` | Hex dump of each forwarded transfer |
 | `--stats-interval <sec>` | Interval for stats output (default: `2.0`) |
+
+### ESP8266 Notes
+
+The ESP8266 is a more constrained platform compared to ESP32 boards:
+
+- Smaller packet buffers and send queue (reduced to conserve RAM)
+- Per-tracker signal strength (RSSI) is not available and will report as 0
+- WiFi channel scanning uses AP detection instead of traffic monitoring, which is less precise but still effective for channel selection
 
 ## OTA Updates
 
