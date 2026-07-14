@@ -587,11 +587,147 @@ void ESPNowCommunication::handleMessage(uint8_t *mac, uint8_t *data, uint8_t dat
 }
 
 static std::set<uint64_t> channelBSSIDs[12];
+static uint32_t channelBytesSeen[12] = {0};
 
 void ESPNowCommunication::scanningLoop() {
-    // ESP8266 does not support promiscuous mode
-    Serial.println("Wifi Promiscuous mode scanning not supported on ESP8266");
-    return;
+    if (!enteredPromiscuousMode) {
+        // Initialize scanning state
+        memset(channelBytesSeen, 0, sizeof(channelBytesSeen));
+        for (int i = 0; i < 12; i++) channelBSSIDs[i].clear();
+
+        if (pairing) exitPairingMode();
+        statusManager.setStatus(SlimeVR::Status::SCANNING, true);
+        disconnectAllTrackers();
+
+        enteredPromiscuousMode = true;
+        scanningTime = 3000;
+        scanningChannelStartTime = millis();
+
+        Serial.println("Starting WiFi AP scan for environment scanning (ESP8266)");
+
+        if (SlimeVR::SerialCom::comEnabled()) {
+            SlimeVR::SerialComMessages::EnvironmentScanMode::print(scanningTime);
+            SlimeVR::SerialComMessages::TrackerUpdate::print(0, 0);
+        }
+
+        // WiFi.scanNetworks() scans all channels at once (~2-3 seconds blocking)
+        // ESP8266 cannot use promiscuous mode alongside ESP-NOW, so we use
+        // the standard AP scan to estimate channel congestion instead.
+        int numNetworks = WiFi.scanNetworks(false, true);
+
+        if (numNetworks <= 0) {
+            Serial.println("No networks found during scan");
+        } else {
+            Serial.printf("Found %d networks\n", numNetworks);
+        }
+
+        for (int i = 0; i < numNetworks; i++) {
+            int ch = WiFi.channel(i);
+            int32_t rssi = WiFi.RSSI(i);
+
+            if (ch < 1 || ch > 11) continue;
+
+            // Same RSSI weighting as ESP32 promiscuous scanner
+            int multiplier = 1;
+            if (rssi >= -20) multiplier = 9;
+            else if (rssi >= -30) multiplier = 8;
+            else if (rssi >= -40) multiplier = 7;
+            else if (rssi >= -50) multiplier = 6;
+            else if (rssi >= -60) multiplier = 4;
+            else if (rssi >= -70) multiplier = 3;
+            else if (rssi >= -80) multiplier = 2;
+
+            // Base score per AP scaled by signal strength
+            channelBytesSeen[ch] += 1000 * multiplier;
+
+            // Track unique BSSIDs (only strong signals, matching ESP32 threshold)
+            uint8_t* bssid = WiFi.BSSID(i);
+            uint64_t bssidKey = 0;
+            for (int j = 0; j < 6; j++) {
+                bssidKey = (bssidKey << 8) | bssid[j];
+            }
+            if (rssi >= -70) {
+                channelBSSIDs[ch].insert(bssidKey);
+            }
+        }
+
+        WiFi.scanDelete();
+
+        // Multiply each channel by the number of APs observed (same as ESP32)
+        scansRun++;
+        for (int ch = 1; ch <= 11; ++ch) {
+            size_t uniqueAPs = channelBSSIDs[ch].size();
+            channelBytesSeen[ch] *= (1 + uniqueAPs);
+        }
+
+        // Emit per-channel progress so the dongle manager gets activity data
+        // (on ESP32 these are sent live every second; here they arrive after the scan)
+        unsigned long scanElapsed = millis() - scanningChannelStartTime;
+        if (SlimeVR::SerialCom::comEnabled()) {
+            for (int ch = 1; ch <= 11; ++ch) {
+                size_t uniqueAPs = channelBSSIDs[ch].size();
+                SlimeVR::SerialComMessages::EnvironmentScanProgress::print(
+                    ch, channelBytesSeen[ch], uniqueAPs, scanElapsed, scanningTime);
+            }
+        }
+
+        // Find the channel with the lowest score
+        if (!SlimeVR::SerialCom::comEnabled()) Serial.println("Channel activity summary:");
+
+        uint32_t minBytes = channelBytesSeen[1];
+        int bestChannel = 1;
+        int primaryChannels[3] = {1, 6, 11};
+        int bestPrimary = -1;
+        uint32_t minPrimaryBytes = UINT32_MAX;
+
+        for (int ch = 1; ch <= 11; ++ch) {
+            size_t uniqueAPs = channelBSSIDs[ch].size();
+            if (!SlimeVR::SerialCom::comEnabled()) {
+                Serial.printf("Channel %2d: %10u score, %u unique APs\n", ch, channelBytesSeen[ch], uniqueAPs);
+            }
+            if (channelBytesSeen[ch] < minBytes) {
+                minBytes = channelBytesSeen[ch];
+                bestChannel = ch;
+            }
+        }
+
+        // Prefer primary channels (1, 6, 11) if within 10% of best
+        for (int i = 0; i < 3; ++i) {
+            int ch = primaryChannels[i];
+            if (channelBytesSeen[ch] <= minBytes * 1.1) {
+                if (channelBytesSeen[ch] < minPrimaryBytes) {
+                    minPrimaryBytes = channelBytesSeen[ch];
+                    bestPrimary = ch;
+                }
+            }
+        }
+
+        int selected = 0;
+        if (bestPrimary != -1) {
+            if (!SlimeVR::SerialCom::comEnabled()) Serial.printf("Best channel (primary preferred): %d (score: %u)\n", bestPrimary, channelBytesSeen[bestPrimary]);
+            Configuration::getInstance().setWifiChannel((uint8_t)bestPrimary);
+            selected = bestPrimary;
+        } else {
+            if (!SlimeVR::SerialCom::comEnabled()) Serial.printf("Best channel: %d (lowest score: %u)\n", bestChannel, minBytes);
+            Configuration::getInstance().setWifiChannel((uint8_t)bestChannel);
+            selected = bestChannel;
+        }
+
+        delay(100);
+
+        scanningEnvironment = false;
+        enteredPromiscuousMode = false;
+        statusManager.setStatus(SlimeVR::Status::SCANNING, false);
+
+        if (SlimeVR::SerialCom::comEnabled()) {
+            SlimeVR::SerialComMessages::EnvironmentScanResults::print(channelBytesSeen, selected);
+            SlimeVR::SerialComMessages::EnvironmentScanMode::print(0);
+        }
+
+        // Reinitialize ESP-NOW on the selected channel
+        esp_now_deinit();
+        begin();
+    }
 }
 
 // Main update loop to be called regularly
@@ -862,7 +998,12 @@ void ESPNowCommunication::startOtaUpdate(const uint8_t auth[16], long port, cons
 }
 
 void ESPNowCommunication::exitEnvironmentScanningMode() {
-    return;
+    scanningEnvironment = false;
+    enteredPromiscuousMode = false;
+    statusManager.setStatus(SlimeVR::Status::SCANNING, false);
+    if (SlimeVR::SerialCom::comEnabled()) {
+        SlimeVR::SerialComMessages::EnvironmentScanMode::print(0);
+    }
 }
 
 void ESPNowCommunication::UnpairAllTrackers() {

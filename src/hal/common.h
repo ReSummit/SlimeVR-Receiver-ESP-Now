@@ -42,10 +42,12 @@ static inline float platformTemperature() { return temperatureRead(); }
 #endif
 
 /**
- * ESP8266 doesn't allow promiscuous scanning; so it must run on the default channel
+ * Channel setting abstraction: ESP8266 uses WiFi.channel(), ESP32 uses WiFi.setChannel()
  */
 #if defined(ARDUINO_ARCH_ESP8266)
-#define WiFi_Platform_SetChannel(ichannel) WiFi.channel(ichannel)
+// wifi_set_channel() returns true on success; map to 0-on-success convention
+// to match ESP32's WiFi.setChannel() which returns esp_err_t (0 = ESP_OK).
+#define WiFi_Platform_SetChannel(ichannel) (wifi_set_channel(ichannel) ? 0 : 1)
 #else
 #define WiFi_Platform_SetChannel(ichannel) WiFi.setChannel(ichannel)
 #endif
