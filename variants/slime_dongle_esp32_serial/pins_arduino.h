@@ -16,10 +16,10 @@
 #define USB_SERIAL       "SVRDGA1B2C3D4E5F6"
 
 // Default USB FirmwareMSC Settings
-#define USB_FW_MSC_VENDOR_ID        "ESP32-S2"     // max 8 chars
+#define USB_FW_MSC_VENDOR_ID        "ESP32"        // max 8 chars
 #define USB_FW_MSC_PRODUCT_ID       "Firmware MSC" // max 16 chars
 #define USB_FW_MSC_PRODUCT_REVISION "1.23"         // max 4 chars
-#define USB_FW_MSC_VOLUME_NAME      "S2-Firmware"  // max 11 chars
+#define USB_FW_MSC_VOLUME_NAME      "ESP32-Firm"   // max 11 chars
 #define USB_FW_MSC_SERIAL_NUMBER    0x00000000
 
 // Defines for Serial / HID Selection
